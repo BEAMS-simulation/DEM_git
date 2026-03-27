@@ -1,3 +1,4 @@
+import datetime
 import numpy as np
 import matplotlib.pyplot as plt
 from dataclasses import dataclass, field
@@ -12,11 +13,11 @@ rng = np.random.default_rng()
 #-----------------------------------------------------------
 #region Parameter
 # Simulation Parameters
-CONTACT_SPRING_CONST    = 20.0
+CONTACT_SPRING_CONST    = 400.0
 CONTACT_DAMPING         = 15.0
-FLOOR_SPRING_CONST      = 100.0
+FLOOR_SPRING_CONST      = 10000.0
 FLOOR_DAMPING           = 15.0
-WALL_SPRING_CONST       = 20.0
+WALL_SPRING_CONST       = 2000.0
 WALL_DAMPING            = 15.0
 GRAVITY_ACCEL           = 9.81
 FRICTION_COEFF          = 0.3
@@ -29,13 +30,13 @@ TIME_STEP               = 2e-5
 MAX_TIME                = 5.0
 
 # Simulation Box
-WALL_LENGTH_X           = 30.0
-WALL_LENGTH_Y           = 30.0
+WALL_LENGTH_X           = 4.00
+WALL_LENGTH_Y           = 4.00
 
 # Initializating Type
 
 # Particle Number
-N                       = 4
+N                       = 10
 
 # Stabilized Condition
 STABLE_TIME             = 0.50
@@ -599,10 +600,15 @@ def simulate(bodies: list[RigidBody]):
         
         flag        = time()
         if step % 1000 == 0:
-            print(f"Step {step}/{max_step} : Simulation Time={t:.6f}sec : Real Time Elapsed={int(flag-start)}sec")
+            dur = int(flag-start)
+            print(f"Step {step}/{max_step} : Simulation Time={t:.6f}sec : Real Time Elapsed={datetime.timedelta(seconds=dur)}sec")
             print(f"total K = {totke:.6f}, tl K = {tke:.6f}, rot K = {rke:.6f}")
+            print(f"total p = {p_norm:.6f}, total l = {l_norm:.6f}")
             if stable_duration > 0.0:
                 print(f"Stabilzed...{stable_duration}/{STABLE_TIME}sec")
+        if step % 10000 == 0:
+            save_bodies_csv(bodies, filename = f"bodies_step_{step}.csv")
+            print(f"Saved bodies at step {step} to bodies_step_{step}.csv")
     end = time()
     
     if t >= MAX_TIME:
@@ -699,6 +705,19 @@ def make_body_from_csv(
         pos = pos,
         vel = vel
     )
+
+def make_balls(
+        n: int,
+        radius_dist: str | int,
+):
+    bodies = []
+    for i in range(n):
+        r = get_random_dist(radius_dist, -0.5, 0.1)
+        m = 4/3 * np.pi * r**3
+        particles = [Particle(pos=np.zeros(3), r=r, m=m)]
+        body = RigidBody(id=i, particles=particles, pos=np.zeros(3), vel=np.zeros(3))
+        bodies.append(body)
+    return bodies
     
 
 #-----------------------------------------------------------
@@ -719,10 +738,12 @@ if __name__ == "__main__":
     # res_bodies, ts, tke_hist, rke_hist, totke_hist, px_hist, py_hist, pz_hist, lx_hist, ly_hist, lz_hist = simulate(bodies)
     # plot_results(ts, tke_hist, rke_hist, totke_hist, px_hist, py_hist, pz_hist, lx_hist, ly_hist, lz_hist)
     # save_bodies_csv(res_bodies, filename = "final_bodies.csv")
-    body = make_body_from_csv(filename = "aggregate_particles.csv")
+    # body = make_body_from_csv(filename = "aggregate_particles.csv")
 
-    temp = [body]
-    bodies = random_bodies_states(temp)
+    # temp = [body]
+    # bodies = random_bodies_states(temp)
+    bodies = make_balls(N, radius_dist = "logn")
+    bodies = random_bodies_states(bodies)
     res_bodies, ts, tke_hist, rke_hist, totke_hist, px_hist, py_hist, pz_hist, lx_hist, ly_hist, lz_hist = simulate(bodies)
     plot_results(ts, tke_hist, rke_hist, totke_hist, px_hist, py_hist, pz_hist, lx_hist, ly_hist, lz_hist)
     save_bodies_csv(res_bodies, filename = "final_bodies.csv")
