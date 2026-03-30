@@ -1,10 +1,12 @@
+import datetime
 import numpy as np
 import matplotlib.pyplot as plt
 from dataclasses import dataclass, field
 from time import time
 import csv
 from scipy.spatial.transform import Rotation as R
-from typing import Any
+from typing import Any, Iterable
+from collections import defaultdict
 
 rng = np.random.default_rng()
 
@@ -19,19 +21,18 @@ FLOOR_DAMPING           = 15.0
 WALL_SPRING_CONST       = 2000.0
 WALL_DAMPING            = 15.0
 GRAVITY_ACCEL           = 9.81
-FRICTION_COEFF          = 1.0
-WALL_FRICTION           = 1.0
-FLOOR_FRICTION          = 1.0
+FRICTION_COEFF          = 0.3
+WALL_FRICTION           = 0.3
+FLOOR_FRICTION          = 0.3
 OVERLAP_COEFF           = 0.4
+ROLLING_DAMPING         = 0.3
 
-TIME_STEP               = 1e-4
-MAX_TIME                = 10.0
+TIME_STEP               = 2e-5
+MAX_TIME                = 5.0
 
 # Simulation Box
-WALL_LENGTH_X           = 1.5
-WALL_LENGTH_Y           = 1.5
-
-# Initializating Type
+WALL_LENGTH_X           = 4.00
+WALL_LENGTH_Y           = 4.00
 
 # Particle Number
 N                       = 30
@@ -48,6 +49,11 @@ Z_WINDOW                = 200
 
 # Can't divide by 0
 DIST_TOL                = 1e-15
+
+CSV_HEADER = ["body id", "particle id", "x", "y", "z", "r", "m"]
+CHECKPOINT_INTERVAL = 10000
+CHECK = True
+LOG_INTERVAL = 1000
 #endregion Parameter
 
 #-----------------------------------------------------------
@@ -59,9 +65,17 @@ class Particle:
     pos:    np.ndarray  # relative position vector
     r:      float
     m:      float
-
-#-----------------------------------------------------------
-#
+    
+    def __post_init__(self):
+        self.pos = np.asarray(self.pos, dtype=float)
+        self.r = float(self.r)
+        self.m = float(self.m)
+        if self.pos.shape != (3,):
+            raise ValueError("Particle.pos must be a 3D vector.")
+        if self.r <= 0:
+            raise ValueError("Particle radius must be positive.")
+        if self.m <= 0:
+            raise ValueError("Particle mass must be positive.")
 
 #-----------------------------------------------------------
 # Particles Utility Functions
@@ -120,6 +134,9 @@ class RigidBody:
         world_w = self.rot.apply(self.w)
         world_s = self.rot.apply(q.pos)
         return self.vel + np.cross(world_w, world_s)
+    
+    def world_w(self):
+        return self.rot.apply(self.w)
 
     def update_orientation(self, dt: float):
         dr = R.from_rotvec(self.w * dt)
@@ -138,9 +155,28 @@ def body_mass_array(bodies: list[RigidBody]):
 
 #-----------------------------------------------------------
 # Radius Distribution
-def get_random_radius(mu: float, sigma: float, n: int = 1):
+def get_lognormal_array(mu: float, sigma: float, n: int = 1):
     rad = rng.lognormal(mu, sigma, size = n)
     return rad[0] if n == 1 else rad
+
+def get_normal_array(mu: float, sigma: float, n: int = 1):
+    rad = rng.normal(mu, sigma, size = n)
+    return rad[0] if n == 1 else rad
+
+def get_uniform_array(a: float, b: float, n: int = 1):
+    rad = rng.uniform(a, b, size = n)
+    return rad[0] if n == 1 else rad
+
+def get_random_dist(dist_type: str | int, *args):
+    match dist_type:
+        case "logn" | "lognormal" | 0:
+            return get_lognormal_array(*args)
+        case "norm" | "normal" | 1:
+            return get_normal_array(*args)
+        case "unif" | "uniform" | 2:
+            return get_uniform_array(*args)
+        case _:
+            raise RuntimeError(f"Unsupported distribution: {dist_type!r}")
 #endregion Classes
 
 #-----------------------------------------------------------
@@ -218,14 +254,14 @@ def floor_contact_particles(bodies: list[RigidBody])->list[dict[str, Any]]:
                 })
     return ov_particles
 
-def wall_contact_particles(bodies: list[RigidBody]) -> list[dict[str, Any]]:
+def wall_contact_particles(bodies: list[RigidBody]) -> list[dict[str, int | float]]:
     ov_particles = []
     world_positions = world_pos_array(bodies)
     
     for i, b in enumerate(bodies):
         for x, p in enumerate(b.particles):
             ov_dict = {}
-            ppos = world_positions[i, x]
+            ppos = world_positions[i][x]
             pr = p.r
             
             px, py = ppos[0], ppos[1]
@@ -265,10 +301,12 @@ def contact_force_torque(bodies: list[RigidBody]):
         (ppos, qpos) = (targ["pos_i"], targ["pos_j"])
         ov = targ["ov"]
 
-        p, q = bodies[i].particles[x], bodies[j].particles[y]
+        b, d = bodies[i], bodies[j]
+        p, q = b.particles[x], d.particles[y]
+        rp, rq = p.r, q.r
 
         nij = targ["nij"]
-        vij = bodies[j].world_vel(q) - bodies[i].world_vel(p)
+        vij = d.world_vel(q) - b.world_vel(p)
         vn  = np.dot(vij, nij)
         vt  = vij - vn*nij
 
@@ -286,8 +324,16 @@ def contact_force_torque(bodies: list[RigidBody]):
         Force[j] += F
 
         xc = 0.5 * ((ppos + p.r*nij) + (qpos - q.r*nij))
-        Torque[i] += np.cross((xc - bodies[i].pos), -F)
-        Torque[j] += np.cross((xc - bodies[j].pos), F)
+        Torque[i] += np.cross((xc - b.pos), -F)
+        Torque[j] += np.cross((xc - d.pos), F)
+
+        Reff = rp * rq / (rp + rq)
+        wrel = b.world_w() - d.world_w()
+        wrel_norm = np.linalg.norm(wrel)
+        if wrel_norm > 0:
+            Trol = -ROLLING_DAMPING * np.linalg.norm(F_n) * Reff * wrel / wrel_norm
+            Torque[i] += Trol
+            Torque[j] -= Trol
     return Force, Torque
 
 def floor_force_torque(bodies: list[RigidBody]):
@@ -301,10 +347,11 @@ def floor_force_torque(bodies: list[RigidBody]):
         (i, x) = targ["body"], targ["part"]
         ov = targ["ov"]
 
-        p = bodies[i].particles[x]
-        ppos = bodies[i].world_pos(p)
+        b = bodies[i]
+        p = b.particles[x]
+        ppos = b.world_pos(p)
         ni = np.array([0, 0, 1], dtype = float)
-        vi = bodies[i].world_vel(p)
+        vi = b.world_vel(p)
         vn = np.dot(vi, ni)
         vt = vi - vn*ni
         
@@ -321,6 +368,12 @@ def floor_force_torque(bodies: list[RigidBody]):
         Force[i] += F
         xc = ppos - p.r * ni
         Torque[i] += np.cross((xc - bodies[i].pos), F)
+
+        wrel = b.world_w()
+        wrel_norm = np.linalg.norm(wrel)
+        if wrel_norm > 0:
+            Trol = - ROLLING_DAMPING * np.linalg.norm(F_n) * p.r * wrel / wrel_norm
+            Torque[i] += Trol
     return Force, Torque
 
 def wall_force_torque(bodies: list[RigidBody]):
@@ -337,10 +390,12 @@ def wall_force_torque(bodies: list[RigidBody]):
     for targ in ov_particles:
         (i, x) = targ["body"], targ["part"]
         b = bodies[i]
-        q = b.particles[x]
+        p = b.particles[x]
         ppos = targ["pos"]
-        vi = b.world_vel(q)
-        
+        vi = b.world_vel(p)
+        wrel = b.world_w()
+        wrel_norm = np.linalg.norm(wrel)
+
         for j in range(4):
             search = searches[j]
             if search in targ:
@@ -360,8 +415,11 @@ def wall_force_torque(bodies: list[RigidBody]):
                 F = F_n + F_t
                 Force[i] += F
 
-                xc = ppos - q.r * nvec
+                xc = ppos - p.r * nvec
                 Torque[i] += np.cross(xc - b.pos, F)
+                if wrel_norm > 0:
+                    Trol = - ROLLING_DAMPING * np.linalg.norm(F_n) * p.r * wrel/wrel_norm
+                    Torque[i] += Trol
     return Force, Torque        
     
 def gravity_force(bodies: list[RigidBody]):
@@ -449,6 +507,42 @@ def box_rot_momentum(bodies: list[RigidBody]):
     return L_tot
 
 #-----------------------------------------------------------
+#region Visualization
+# Plotter
+def plot_results(ts, tke_hist, rke_hist, totke_hist, px_hist, py_hist, pz_hist, lx_hist, ly_hist, lz_hist):
+    fig = plt.figure(figsize = (16, 6))
+
+    ax1 = fig.add_subplot(1, 2, 1)
+    ax1.plot(ts, tke_hist, label = "Trans KE")
+    ax1.plot(ts, rke_hist, label = "Rotat KE")
+    ax1.plot(ts, totke_hist, label = "Total KE")
+    ax1.set_title("Kinetic Energies")
+    ax1.set_xlabel("time")
+    ax1.set_ylabel("KE")
+    ax1.grid(True)
+    ax1.legend()
+        
+    ax2 = fig.add_subplot(1, 2, 2)
+    ax2.plot(ts, px_hist, label = "px")
+    ax2.plot(ts, py_hist, label = "py")
+    ax2.plot(ts, pz_hist, label = "pz")
+    ax2.plot(ts, lx_hist, label = "lx")
+    ax2.plot(ts, ly_hist, label = "ly")
+    ax2.plot(ts, lz_hist, label = "lz")
+    ax2.set_title("Momentums")
+    ax2.set_xlabel("time")
+    ax2.set_ylabel("momentum")
+    ax2.grid(True)
+    ax2.legend()
+
+    plt.tight_layout()
+    plt.show()
+
+
+
+#endregion Visualization
+
+#-----------------------------------------------------------
 #region Simulation
 # Integrator
 def leapfrog(bodies: list[RigidBody]):
@@ -468,7 +562,7 @@ def leapfrog(bodies: list[RigidBody]):
         dw      = b.Ib_inv @ (tau - np.cross(b.w, b.Ib @ b.w))
         b.w     += 0.5 * dw * TIME_STEP
 
-def simulate(bodies: list[RigidBody]):
+def simulate(bodies: list[RigidBody], checkpoint_interval: int | None = CHECKPOINT_INTERVAL):
     ts              = []
     tke_hist        = []
     rke_hist        = []
@@ -482,7 +576,7 @@ def simulate(bodies: list[RigidBody]):
     start           = time()
     
     step            = 0
-    max_step        = MAX_TIME // TIME_STEP + 1.0
+    max_step        = int(np.ceil(MAX_TIME / TIME_STEP))
     
     while t < MAX_TIME:
         leapfrog(bodies)
@@ -516,10 +610,21 @@ def simulate(bodies: list[RigidBody]):
             print(f"K = {totke:.6e}")
             break
         
-        flag        = time()
-        if step % 1000 == 0:
-            print(f"Step {step}/{max_step} : Time Elapsed={int(flag-start)}sec")
+        now = time()
+        if step % LOG_INTERVAL == 0:
+            dur = int(now - start)
+            print(
+                f"Step {step}/{max_step} : Simulation Time={t:.6f} sec : "
+                f"Real Time Elapsed={datetime.timedelta(seconds=dur)}"
+            )
             print(f"total K = {totke:.6f}, tl K = {tke:.6f}, rot K = {rke:.6f}")
+            print(f"total p = {p_norm:.6f}, total l = {l_norm:.6f}")
+            if stable_duration > 0.0:
+                print(f"Stabilizing... {stable_duration:.6f}/{STABLE_TIME:.6f} sec")
+
+        if checkpoint_interval and step % checkpoint_interval == 0 and CHECK:
+            save_bodies_csv(bodies, filename=f"bodies_step_{step}.csv", coords="world")
+            print(f"Saved bodies at step {step} to bodies_step_{step}.csv")
     end = time()
     
     if t >= MAX_TIME:
@@ -540,18 +645,91 @@ def simulate(bodies: list[RigidBody]):
 
 #-----------------------------------------------------------
 #region csv
-def save_bodies_csv(bodies: list[RigidBody], filename = "final_bodies.csv"):
-    with open(filename, "w", newline = "", encoding = "utf-8") as f:
+def save_bodies_csv(bodies: list[RigidBody], filename: str = "final_bodies.csv", coords: str = "world"):
+    if coords not in {"world", "body"}:
+        raise ValueError("coords must be either 'world' or 'body'.")
+
+    with open(filename, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow(["body id", "particle id", "x", "y", "z", "r", "m"])
-        
-        for i, b in enumerate(bodies):
-            for x, p in enumerate(b.particles):
-                pos = b.world_pos(p)
+        writer.writerow(CSV_HEADER)
+
+        for body in bodies:
+            for particle_id, p in enumerate(body.particles):
+                pos = body.world_pos(p) if coords == "world" else p.pos
                 writer.writerow([
-                    i, x, pos[0], pos[1], pos[2], p.r, p.m
+                    body.id,
+                    particle_id,
+                    pos[0],
+                    pos[1],
+                    pos[2],
+                    p.r,
+                    p.m,
                 ])
-#endregion csv
+
+
+def _group_csv_rows(rows: Iterable[dict[str, str]]):
+    grouped: dict[int, list[dict[str, str]]] = defaultdict(list)
+    for row in rows:
+        try:
+            body_id = int(row["body id"])
+        except KeyError as exc:
+            raise ValueError("CSV header must contain: 'body id', 'particle id', 'x', 'y', 'z', 'r', 'm'.") from exc
+        grouped[body_id].append(row)
+    return grouped
+
+
+def load_bodies_from_csv(
+    filename: str,
+    coords: str = "world",
+    vel: np.ndarray | None = None,
+) -> list[RigidBody]:
+    if coords not in {"world", "body"}:
+        raise ValueError("coords must be either 'world' or 'body'.")
+
+    if vel is None:
+        vel = np.zeros(3, dtype=float)
+    else:
+        vel = np.asarray(vel, dtype=float)
+
+    with open(filename, "r", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        if reader.fieldnames != CSV_HEADER:
+            raise ValueError(
+                f"Unexpected CSV header: {reader.fieldnames}. Expected {CSV_HEADER}."
+            )
+        grouped = _group_csv_rows(reader)
+
+    bodies: list[RigidBody] = []
+    for body_id, items in sorted(grouped.items(), key=lambda x: x[0]):
+        xyz = np.array(
+            [[float(row["x"]), float(row["y"]), float(row["z"])] for row in items],
+            dtype=float,
+        )
+        radii = np.array([float(row["r"]) for row in items], dtype=float)
+        masses = np.array([float(row["m"]) for row in items], dtype=float)
+
+        if coords == "world":
+            total_mass = float(np.sum(masses))
+            com = np.sum(masses[:, None] * xyz, axis=0) / total_mass
+            rel_xyz = xyz - com
+            body_pos = com
+        else:
+            rel_xyz = xyz
+            body_pos = np.zeros(3, dtype=float)
+
+        particles = [
+            Particle(pos=rel_xyz[i], r=radii[i], m=masses[i])
+            for i in range(len(items))
+        ]
+        bodies.append(
+            RigidBody(
+                id=body_id,
+                particles=particles,
+                pos=body_pos,
+                vel=vel.copy(),
+            )
+        )
+    return bodies
 
 
 def make_body_from_specs(
@@ -560,42 +738,91 @@ def make_body_from_specs(
     pos: np.ndarray | None = None,
     vel: np.ndarray | None = None,
 ) -> RigidBody:
-    if pos is None:
-        pos = np.zeros(3, dtype=float)
-    else:
-        pos = np.asarray(pos, dtype=float)
-
-    if vel is None:
-        vel = np.zeros(3, dtype=float)
-    else:
-        vel = np.asarray(vel, dtype=float)
+    pos = np.zeros(3, dtype=float) if pos is None else np.asarray(pos, dtype=float)
+    vel = np.zeros(3, dtype=float) if vel is None else np.asarray(vel, dtype=float)
 
     particles = [
         Particle(pos=np.array(xyz, dtype=float), r=float(rad), m=float(mass))
         for xyz, rad, mass in specs
     ]
+    return RigidBody(id=body_id, particles=particles, pos=pos, vel=vel)
 
-    return RigidBody(
-        id=body_id,
-        particles=particles,
-        pos=pos,
-        vel=vel,
-    )
+
+def make_body_from_csv(
+    filename: str,
+    body_id: int | None = None,
+    coords: str = "world",
+    pos: np.ndarray | None = None,
+    vel: np.ndarray | None = None,
+) -> RigidBody:
+    bodies = load_bodies_from_csv(filename=filename, coords=coords, vel=vel)
+
+    if body_id is None:
+        if len(bodies) != 1:
+            raise ValueError(
+                "CSV contains multiple bodies. Pass body_id explicitly or use load_bodies_from_csv()."
+            )
+        body = bodies[0]
+    else:
+        matched = [b for b in bodies if b.id == body_id]
+        if not matched:
+            raise ValueError(f"No body found with body_id={body_id}.")
+        body = matched[0]
+
+    if pos is not None:
+        body.pos = np.asarray(pos, dtype=float)
+    return body
+
+
+def make_balls(
+    n: int,
+    radius_dist: str | int,
+    *dist_args,
+    density: float = 1.0,
+):
+    if n <= 0:
+        raise ValueError("n must be positive.")
+    if density <= 0:
+        raise ValueError("density must be positive.")
+
+    if not dist_args:
+        dist_args = (-0.5, 0.1)
+
+    bodies = []
+    for i in range(n):
+        r = float(get_random_dist(radius_dist, *dist_args))
+        if r <= 0:
+            raise ValueError(
+                "Generated a non-positive radius. Adjust the distribution parameters."
+            )
+        m = density * (4.0 / 3.0) * np.pi * r ** 3
+        particles = [Particle(pos=np.zeros(3), r=r, m=m)]
+        body = RigidBody(id=i, particles=particles, pos=np.zeros(3), vel=np.zeros(3))
+        bodies.append(body)
+    return bodies
+#endregion csv
+    
 
 #-----------------------------------------------------------
 #region Main
 # Main
 if __name__ == "__main__":
-    triangle_specs = [
-    ((0.0, 0.0, 0.0), 0.2, 1.0),
-    ((0.35, 0.0, 0.0), 0.2, 1.0),
-    ((0.0, 0.35, 0.0), 0.2, 1.0),
-    ]
+    bodies = make_balls(N, radius_dist="logn", density=1.0)
+    bodies = random_bodies_states(bodies)
 
-    temp = []
-    for i in range(6):
-        temp.append(make_body_from_specs(i, triangle_specs))
-    
-    bodies = random_bodies_states(temp)
-    res_bodies, ts, tke_hist, rke_hist, totke_hist, px_hist, py_hist, pz_hist, lx_hist, ly_hist, lz_hist = simulate(bodies)
-    save_bodies_csv(res_bodies, filename = "final_bodies.csv")
+    (
+        res_bodies,
+        ts,
+        tke_hist,
+        rke_hist,
+        totke_hist,
+        px_hist,
+        py_hist,
+        pz_hist,
+        lx_hist,
+        ly_hist,
+        lz_hist,
+    ) = simulate(bodies)
+
+    plot_results(ts, tke_hist, rke_hist, totke_hist, px_hist, py_hist, pz_hist, lx_hist, ly_hist, lz_hist)
+    save_bodies_csv(res_bodies, filename="final_bodies.csv", coords="world")

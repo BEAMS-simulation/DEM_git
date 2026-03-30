@@ -214,12 +214,12 @@ def plot_aggregate(aggregate):
 def save_aggregate_csv(aggregate, filename="aggregate_particles.csv"):
     with open(filename, "w", newline = "", encoding = "utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow(["id", "x", "y", "z", "r", "m"])
+        writer.writerow(["body id", "id", "x", "y", "z", "r", "m"])
 
         for i, p in enumerate(aggregate):
             pos = p.pos
             writer.writerow(
-                [i, pos[0], pos[1], pos[2], p.r, p.m]
+                [0, i, pos[0], pos[1], pos[2], p.r, p.m]
             )
     print(f"Saved particle data to {filename}")
 # ----------------------------------------------------------------------------
