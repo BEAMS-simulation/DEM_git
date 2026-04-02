@@ -1060,13 +1060,13 @@ if __name__ == "__main__":
         for i in range(n_balls)
     ]
 
-    tic = time.time()
+    tic = time()
     # 초기 랜덤 배치
     world = builder.make_init_world(
         bodies=bodies,
         boxtype="imp",
     )
-    toc = time.time()
+    toc = time()
     print(f"initialized in {toc-tic:.3f} sec")
 
     z_offset = 5.0
