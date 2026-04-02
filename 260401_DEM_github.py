@@ -7,48 +7,52 @@ import csv
 from scipy.spatial.transform import Rotation as R
 from typing import Any, Iterable
 from collections import defaultdict
+import colorama
 
+colorama.init(autoreset=True)
 rng = np.random.default_rng()
 
 
-SPRING_PARTICLE = 100.0
-DAMPING_PARTICLE = 15.0
+SPRING_PARTICLE = 400.0
+DAMPING_PARTICLE = 20.0
+
+SPRING_WALL = 5000.0
+DAMPING_WALL = 60.0 
+
 MU_PARTICLE = 0.3
-SPRING_WALL = 3000.0
-DAMPING_WALL = 25.0 
 MU_WALL = 0.3 
-ROLLING_DAMPING = 0.3 
+ROLLING_DAMPING = 0.4
 
-DIST_TOL = 1e-12
+DIST_TOL = 1e-15
 
-TIME_STEP = 1e-5
-MAX_TIME  = 30
+TIME_STEP = 2e-4
+MAX_TIME  = 100.0
 RECORD_STEP = 1000
 LOG_STEP    = 1000
-STABLE_TIME = 0.3
+STABLE_TIME = 0.15
 
-KINETIC_TOL = 1e-5
-TMOM_TOL    = 1e-5
-RMOM_TOL    = 1e-5
+KINETIC_TOL = 5e-5
+TMOM_TOL    = 2e-3
+RMOM_TOL    = 2e-3
 
-SLEEP_DUR_THRESHOLD = 30
-SLEEP_SPD = 1e-5
-SLEEP_ANG_SPD = 1e-5
-WAKE_SPD = 2e-4
-WAKE_ANG_SPD = 2e-4
-WAKE_ACC = 1e-3
-WAKE_ANG_ACC = 1e-3
+SLEEP_DUR_THRESHOLD = 1000
+SLEEP_SPD = 5e-3
+SLEEP_ANG_SPD = 5e-2
+WAKE_SPD = 2e-2
+WAKE_ANG_SPD = 2e-1
+WAKE_ACC = 3.0
+WAKE_ANG_ACC = 10.0
 
-WALL_X = 3.0
-WALL_Y = 3.0
+WALL_X = 10.0
+WALL_Y = 10.0
 WALL_Z = 10000.0
 
 GRAVITY_ACCEL = 9.8
 
-BATCH_NUMBER = 3
+BATCH_NUMBER = 2
 MAX_BATCH_TRIALS = 1000
 
-SKIN = 0.01
+SKIN = 0.03
 
 
 CSV_HEADER = ["body id", "particle id", "x", "y", "z", "r", "m"]
@@ -196,15 +200,20 @@ class Rigidbody:
         self.update_orientation(dt)
     
     
-    def lullaby(self):
+    def lullaby(self, can_sleep: bool):
         if self.sleep_state.is_sleep:
             return
-        if np.sum(self.vel ** 2) < (SLEEP_SPD ** 2) and np.sum(self.w ** 2) < (SLEEP_ANG_SPD ** 2):
+
+        low_trans = np.dot(self.vel, self.vel) < (SLEEP_SPD ** 2)
+        low_rot   = np.dot(self.w, self.w) < (SLEEP_ANG_SPD ** 2)
+
+        if can_sleep and low_trans and low_rot:
             if self.sleep_state.nodoff():
                 self.vel[:] = 0.0
                 self.w[:] = 0.0
         else:
             self.sleep_state.sleepy_dur = 0
+    
     def stimulate(self, force: np.ndarray | None, torque: np.ndarray | None):
         if not self.sleep_state.is_sleep:
             return
@@ -329,6 +338,10 @@ class World(Box):
             for b in self.bodies:
                 b.pos[0] %= WALL_X
                 b.pos[1] %= WALL_Y
+        for b in self.bodies:
+            if b.pos[2] < -10:
+                b.pos[2] = 20
+                print(colorama.Fore.RED + "PERMEATE FLOOR!")
         
     def is_overlap_bodies(self, i: int, j: int) -> bool:
         body_i = self.bodies[i]
@@ -419,8 +432,8 @@ class World(Box):
                 bi = self.bodies[i]
                 bj = self.bodies[j]
                 
-                if bi.sleep_state.is_sleep and bj.sleep_state.is_sleep:
-                    continue
+                # if bi.sleep_state.is_sleep and bj.sleep_state.is_sleep:
+                #     continue
                 
                 f, tau_i, tau_j = self.compute_contact_body_force_torque(i, j)
                 F_tot[i] -= f
@@ -491,8 +504,8 @@ class World(Box):
         
         for i in range(self.n):
             b = self.bodies[i]
-            if b.sleep_state.is_sleep:
-                continue
+            # if b.sleep_state.is_sleep:
+            #     continue
             f, tau = self.compute_wall_body_force_torque(i)
             F_tot[i] += f
             T_tot[i] += tau
@@ -553,8 +566,8 @@ class World(Box):
         for i in range(self.n):
             b = self.bodies[i]
             f = np.array([0, 0, 0])
-            if not b.sleep_state.is_sleep:
-                f[2] += -GRAVITY_ACCEL * b.body.mass
+            # if not b.sleep_state.is_sleep:
+            f[2] += -GRAVITY_ACCEL * b.body.mass
             F_tot[i] += f
         return F_tot
     
@@ -591,6 +604,70 @@ class World(Box):
         for b in self.bodies:
             rmom += b.rotation_momentum()
         return rmom
+
+    def body_has_wall_contact(self, i: int, wall: str | None = None) -> bool:
+        walls = [wall] if wall is not None else ["west", "south", "east", "north", "down", "up"]
+        bi = self.bodies[i]
+
+        for w in walls:
+            if not self.is_overlap_body_wall(i, w):
+                continue
+            for x in range(bi.body.n):
+                if self.is_overlap_particle_wall(i, x, w):
+                    return True
+        return False
+
+
+    def body_has_body_contact(self, i: int) -> bool:
+        bi = self.bodies[i]
+
+        for j in bi.neighbors:
+            if j == i:
+                continue
+            if not self.is_overlap_bodies(i, j):
+                continue
+
+            bj = self.bodies[j]
+            for x in range(bi.body.n):
+                for y in range(bj.body.n):
+                    if self.is_overlap_particles(i, x, j, y):
+                        return True
+        return False
+
+
+    def body_is_supported(self, i: int, nz_tol: float = 0.3) -> bool:
+        # 바닥이 직접 받치면 support
+        if self.body_has_wall_contact(i, "down"):
+            return True
+
+        bi = self.bodies[i]
+
+        # 다른 body가 아래에서 받치면 support
+        for j in bi.neighbors:
+            if j == i:
+                continue
+            if not self.is_overlap_bodies(i, j):
+                continue
+
+            bj = self.bodies[j]
+            for x in range(bi.body.n):
+                for y in range(bj.body.n):
+                    if not self.is_overlap_particles(i, x, j, y):
+                        continue
+
+                    d_xy = self.disp(bj.world_pos(y), bi.world_pos(x))
+                    dist_xy = np.linalg.norm(d_xy)
+                    if dist_xy <= DIST_TOL:
+                        continue
+
+                    n_xy = d_xy / dist_xy
+                    # n_xy는 i -> j 방향
+                    # j가 아래에서 i를 받치면 n_xy.z < 0 이고,
+                    # i가 받는 법선력은 위쪽 성분을 가짐
+                    if n_xy[2] < -nz_tol:
+                        return True
+
+        return False
 #endregion world
 
 #region simulator
@@ -644,16 +721,17 @@ class Simulator:
         
         self.force, self.torque = force, torque
         
-        for body in self.world.bodies:
-            body.lullaby()
+        for i, body in enumerate(self.world.bodies):
+            can_sleep = self.world.body_is_supported(i)
+            body.lullaby(can_sleep)
     
     def is_stable(self):
+        total_ke = self.world.total_trans_energy() + self.world.total_rot_energy()
+
         return (
-            (self.world.total_trans_energy() + self.world.total_rot_energy() < KINETIC_TOL)
-            and
-            np.linalg.norm(self.world.total_trans_mom()) < TMOM_TOL
-            and
-            np.linalg.norm(self.world.total_rot_mom()) < RMOM_TOL
+            total_ke < KINETIC_TOL
+            and self.max_body_speed() < SLEEP_SPD
+            and self.max_body_ang_speed() < SLEEP_ANG_SPD
         )
     
     def simulation(self):
@@ -703,11 +781,11 @@ class Simulator:
             if step % LOG_STEP == 0:
                 dur = int(now - start)
                 print(
-                    f"Step {step}/{max_step} : Time Elapsed={int(now-start)} sec : "
+                    f"Step {step}/{max_step} : Time Elapsed={t:.3f} sec : "
                     f"Real Time Elapsed={datetime.timedelta(seconds = dur)}"
                 )
                 print(f"total K = {tote:.6f}, tl K = {te:.6f}, rot K = {re:.6f}")
-                print(f"total p = {p_norm:.6f}, total l = {l_norm:.6f}")
+                print(f"total p = {p_norm:.6f}, total l = {l_norm:.6f}, sleeping : {self.sleep_counter()}/{self.world.n}")
         end = time()
         
         if t >= MAX_TIME:
@@ -722,6 +800,23 @@ class Simulator:
             np.array(p_hist),
             np.array(l_hist)
         )
+    
+    def sleep_counter(self):
+        cnt = 0
+        for b in self.world.bodies:
+            if b.sleep_state.is_sleep:
+                cnt += 1
+        return cnt
+    
+    def max_body_speed(self):
+        if self.world.n == 0:
+            return 0.0
+        return max(np.linalg.norm(b.vel) for b in self.world.bodies)
+
+    def max_body_ang_speed(self):
+        if self.world.n == 0:
+            return 0.0
+        return max(np.linalg.norm(b.w) for b in self.world.bodies)
 #endregion simulator
 
 #region storage
@@ -965,37 +1060,111 @@ class Distributioner:
 
 
 #region main
+def plot_history(
+    ts: np.ndarray,
+    te_hist: np.ndarray,
+    re_hist: np.ndarray,
+    p_hist: np.ndarray,
+    l_hist: np.ndarray,
+):
+    if len(ts) == 0:
+        raise ValueError("No recorded history to plot. Increase RECORD_STEP or run longer.")
+
+    te_hist = np.asarray(te_hist, dtype=float)
+    re_hist = np.asarray(re_hist, dtype=float)
+    p_hist = np.asarray(p_hist, dtype=float)
+    l_hist = np.asarray(l_hist, dtype=float)
+
+    if p_hist.ndim != 2 or p_hist.shape[1] != 3:
+        raise ValueError(f"p_hist must have shape (N, 3), got {p_hist.shape}")
+    if l_hist.ndim != 2 or l_hist.shape[1] != 3:
+        raise ValueError(f"l_hist must have shape (N, 3), got {l_hist.shape}")
+
+    tote_hist = te_hist + re_hist
+    p_norm = np.linalg.norm(p_hist, axis=1)
+    l_norm = np.linalg.norm(l_hist, axis=1)
+
+    fig, axes = plt.subplots(3, 1, figsize=(10, 12), sharex=True)
+
+    # 1) 에너지
+    ax = axes[0]
+    ax.plot(ts, te_hist, label="Translational KE")
+    ax.plot(ts, re_hist, label="Rotational KE")
+    ax.plot(ts, tote_hist, label="Total KE")
+    ax.set_ylabel("Energy")
+    ax.set_title("Energy History")
+    ax.grid(True)
+    ax.legend()
+
+    # 2) 선운동량
+    ax = axes[1]
+    ax.plot(ts, p_hist[:, 0], label="px")
+    ax.plot(ts, p_hist[:, 1], label="py")
+    ax.plot(ts, p_hist[:, 2], label="pz")
+    ax.plot(ts, p_norm, label="|p|")
+    ax.set_ylabel("Linear Momentum")
+    ax.set_title("Linear Momentum History")
+    ax.grid(True)
+    ax.legend()
+
+    # 3) 각운동량
+    ax = axes[2]
+    ax.plot(ts, l_hist[:, 0], label="lx")
+    ax.plot(ts, l_hist[:, 1], label="ly")
+    ax.plot(ts, l_hist[:, 2], label="lz")
+    ax.plot(ts, l_norm, label="|l|")
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Angular Momentum")
+    ax.set_title("Angular Momentum History")
+    ax.grid(True)
+    ax.legend()
+
+    fig.tight_layout()
+    plt.show()
+
+    return fig, axes
+
 if __name__ == "__main__":
     storage = Storage()
     builder = Builder(storage=storage)
 
-    n_balls = 30
-    radius = 0.5
-    mass = 1.0
+    n_balls = 10
+    density = 2.0
 
-    sphere = builder.make_sphere(
-        pos=np.zeros(3, dtype=float),
-        r=radius,
-        m=mass,
-    )
-    aggregate = builder.make_aggregate([sphere])
-    
-    bodies = [
-        builder.make_rigid_body(
+    radii_A = Distributioner.uniform_array(0.2, 0.5, n=n_balls * 2)
+    radii_B = Distributioner.uniform_array(1.0, 2.0, n=n_balls)
+    radii = np.concatenate([radii_A, radii_B])
+    rng.shuffle(radii)
+
+    bodies: list[Rigidbody] = []
+
+    for i, r in enumerate(radii):
+        # 같은 밀도라면 질량은 부피 비례
+        m = density * (4.0 / 3.0) * np.pi * (r ** 3)
+
+        sphere = builder.make_sphere(
+            pos=np.zeros(3, dtype=float),   # single sphere aggregate -> local origin
+            r=float(r),
+            m=float(m),
+        )
+
+        aggregate = builder.make_aggregate([sphere])
+
+        body = builder.make_rigid_body(
             aggregate=aggregate,
             id=i,
-            pos=np.zeros(3, dtype=float),
+            pos=np.zeros(3, dtype=float),   # 실제 초기 배치는 make_init_world가 정함
         )
-        for i in range(n_balls)
-    ]
+        bodies.append(body)
 
-    # 초기 랜덤 배치
     world = builder.make_init_world(
         bodies=bodies,
         boxtype="imp",
     )
+    storage.save_world_csv(world, "initial_world.csv")
 
-    z_offset = 5.0
+    # 전부 조금 위에서 떨어뜨리고 싶으면 전체 z-offset 추가
+    z_offset = 0.1
     for body in world.bodies:
         body.add_pos(np.array([0.0, 0.0, z_offset], dtype=float))
 
@@ -1004,6 +1173,7 @@ if __name__ == "__main__":
 
     world_final, ts, te_hist, re_hist, p_hist, l_hist = sim.simulation()
 
+    plot_history(ts, te_hist, re_hist, p_hist, l_hist)
     storage.save_world_csv(world_final, "final_state.csv")
 
 #endregion main

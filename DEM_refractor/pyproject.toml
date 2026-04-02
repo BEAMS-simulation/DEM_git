@@ -1,0 +1,9 @@
+[project]
+name = "demrigid"
+version = "0.1.0"
+description = "Refactored DEM-based rigid body simulator (aggregate of spheres)"
+requires-python = ">=3.10"
+dependencies = ["numpy", "matplotlib"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
