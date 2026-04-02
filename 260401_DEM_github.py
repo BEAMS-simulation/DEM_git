@@ -11,25 +11,25 @@ from collections import defaultdict
 rng = np.random.default_rng()
 
 
-SPRING_PARTICLE = 100.0
+SPRING_PARTICLE = 400.0
 DAMPING_PARTICLE = 15.0
 MU_PARTICLE = 0.3
-SPRING_WALL = 3000.0
-DAMPING_WALL = 25.0 
+SPRING_WALL = 10000.0
+DAMPING_WALL = 15.0 
 MU_WALL = 0.3 
 ROLLING_DAMPING = 0.3 
 
-DIST_TOL = 1e-12
+DIST_TOL = 1e-15
 
-TIME_STEP = 1e-5
-MAX_TIME  = 30
+TIME_STEP = 2e-5
+MAX_TIME  = 30.0
 RECORD_STEP = 1000
 LOG_STEP    = 1000
 STABLE_TIME = 0.3
 
-KINETIC_TOL = 1e-5
-TMOM_TOL    = 1e-5
-RMOM_TOL    = 1e-5
+KINETIC_TOL = 1e-3
+TMOM_TOL    = 1e-3
+RMOM_TOL    = 1e-3
 
 SLEEP_DUR_THRESHOLD = 30
 SLEEP_SPD = 1e-5
@@ -39,8 +39,8 @@ WAKE_ANG_SPD = 2e-4
 WAKE_ACC = 1e-3
 WAKE_ANG_ACC = 1e-3
 
-WALL_X = 3.0
-WALL_Y = 3.0
+WALL_X = 4.0
+WALL_Y = 4.0
 WALL_Z = 10000.0
 
 GRAVITY_ACCEL = 9.8
@@ -707,7 +707,7 @@ class Simulator:
                     f"Real Time Elapsed={datetime.timedelta(seconds = dur)}"
                 )
                 print(f"total K = {tote:.6f}, tl K = {te:.6f}, rot K = {re:.6f}")
-                print(f"total p = {p_norm:.6f}, total l = {l_norm:.6f}")
+                print(f"total p = {p_norm:.6f}, total l = {l_norm:.6f}, sleeping : {self.sleep_counter()}/{self.world.n}")
         end = time()
         
         if t >= MAX_TIME:
@@ -722,6 +722,13 @@ class Simulator:
             np.array(p_hist),
             np.array(l_hist)
         )
+    
+    def sleep_counter(self):
+        cnt = 0
+        for b in self.world.bodies:
+            if b.sleep_state.is_sleep:
+                cnt += 1
+        return cnt
 #endregion simulator
 
 #region storage
@@ -965,6 +972,70 @@ class Distributioner:
 
 
 #region main
+def plot_history(
+    ts: np.ndarray,
+    te_hist: np.ndarray,
+    re_hist: np.ndarray,
+    p_hist: np.ndarray,
+    l_hist: np.ndarray,
+):
+    if len(ts) == 0:
+        raise ValueError("No recorded history to plot. Increase RECORD_STEP or run longer.")
+
+    te_hist = np.asarray(te_hist, dtype=float)
+    re_hist = np.asarray(re_hist, dtype=float)
+    p_hist = np.asarray(p_hist, dtype=float)
+    l_hist = np.asarray(l_hist, dtype=float)
+
+    if p_hist.ndim != 2 or p_hist.shape[1] != 3:
+        raise ValueError(f"p_hist must have shape (N, 3), got {p_hist.shape}")
+    if l_hist.ndim != 2 or l_hist.shape[1] != 3:
+        raise ValueError(f"l_hist must have shape (N, 3), got {l_hist.shape}")
+
+    tote_hist = te_hist + re_hist
+    p_norm = np.linalg.norm(p_hist, axis=1)
+    l_norm = np.linalg.norm(l_hist, axis=1)
+
+    fig, axes = plt.subplots(3, 1, figsize=(10, 12), sharex=True)
+
+    # 1) 에너지
+    ax = axes[0]
+    ax.plot(ts, te_hist, label="Translational KE")
+    ax.plot(ts, re_hist, label="Rotational KE")
+    ax.plot(ts, tote_hist, label="Total KE")
+    ax.set_ylabel("Energy")
+    ax.set_title("Energy History")
+    ax.grid(True)
+    ax.legend()
+
+    # 2) 선운동량
+    ax = axes[1]
+    ax.plot(ts, p_hist[:, 0], label="px")
+    ax.plot(ts, p_hist[:, 1], label="py")
+    ax.plot(ts, p_hist[:, 2], label="pz")
+    ax.plot(ts, p_norm, label="|p|")
+    ax.set_ylabel("Linear Momentum")
+    ax.set_title("Linear Momentum History")
+    ax.grid(True)
+    ax.legend()
+
+    # 3) 각운동량
+    ax = axes[2]
+    ax.plot(ts, l_hist[:, 0], label="lx")
+    ax.plot(ts, l_hist[:, 1], label="ly")
+    ax.plot(ts, l_hist[:, 2], label="lz")
+    ax.plot(ts, l_norm, label="|l|")
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Angular Momentum")
+    ax.set_title("Angular Momentum History")
+    ax.grid(True)
+    ax.legend()
+
+    fig.tight_layout()
+    plt.show()
+
+    return fig, axes
+
 if __name__ == "__main__":
     storage = Storage()
     builder = Builder(storage=storage)
@@ -989,11 +1060,14 @@ if __name__ == "__main__":
         for i in range(n_balls)
     ]
 
+    tic = time.time()
     # 초기 랜덤 배치
     world = builder.make_init_world(
         bodies=bodies,
         boxtype="imp",
     )
+    toc = time.time()
+    print(f"initialized in {toc-tic:.3f} sec")
 
     z_offset = 5.0
     for body in world.bodies:
@@ -1005,5 +1079,6 @@ if __name__ == "__main__":
     world_final, ts, te_hist, re_hist, p_hist, l_hist = sim.simulation()
 
     storage.save_world_csv(world_final, "final_state.csv")
+    plot_history(ts, te_hist, re_hist, p_hist, l_hist)
 
 #endregion main
