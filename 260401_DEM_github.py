@@ -12,43 +12,45 @@ rng = np.random.default_rng()
 
 
 SPRING_PARTICLE = 400.0
-DAMPING_PARTICLE = 15.0
+DAMPING_PARTICLE = 20.0
+
+SPRING_WALL = 4000.0
+DAMPING_WALL = 60.0 
+
 MU_PARTICLE = 0.3
-SPRING_WALL = 10000.0
-DAMPING_WALL = 15.0 
 MU_WALL = 0.3 
-ROLLING_DAMPING = 0.6
+ROLLING_DAMPING = 0.4
 
 DIST_TOL = 1e-15
 
-TIME_STEP = 1e-4
-MAX_TIME  = 30.0
+TIME_STEP = 2e-4
+MAX_TIME  = 10.0
 RECORD_STEP = 1000
 LOG_STEP    = 1000
-STABLE_TIME = 0.3
+STABLE_TIME = 0.15
 
-KINETIC_TOL = 1e-3
-TMOM_TOL    = 1e-3
-RMOM_TOL    = 1e-3
+KINETIC_TOL = 5e-5
+TMOM_TOL    = 2e-3
+RMOM_TOL    = 2e-3
 
 SLEEP_DUR_THRESHOLD = 1000
 SLEEP_SPD = 5e-3
 SLEEP_ANG_SPD = 5e-2
 WAKE_SPD = 2e-2
 WAKE_ANG_SPD = 2e-1
-WAKE_ACC = 2.0
+WAKE_ACC = 3.0
 WAKE_ANG_ACC = 10.0
 
-WALL_X = 4.0
-WALL_Y = 4.0
+WALL_X = 10.0
+WALL_Y = 10.0
 WALL_Z = 10000.0
 
 GRAVITY_ACCEL = 9.8
 
-BATCH_NUMBER = 3
+BATCH_NUMBER = 2
 MAX_BATCH_TRIALS = 1000
 
-SKIN = 0.01
+SKIN = 0.03
 
 
 CSV_HEADER = ["body id", "particle id", "x", "y", "z", "r", "m"]
@@ -196,15 +198,20 @@ class Rigidbody:
         self.update_orientation(dt)
     
     
-    def lullaby(self):
+    def lullaby(self, can_sleep: bool):
         if self.sleep_state.is_sleep:
             return
-        if np.sum(self.vel ** 2) < (SLEEP_SPD ** 2) and np.sum(self.w ** 2) < (SLEEP_ANG_SPD ** 2):
+
+        low_trans = np.dot(self.vel, self.vel) < (SLEEP_SPD ** 2)
+        low_rot   = np.dot(self.w, self.w) < (SLEEP_ANG_SPD ** 2)
+
+        if can_sleep and low_trans and low_rot:
             if self.sleep_state.nodoff():
                 self.vel[:] = 0.0
                 self.w[:] = 0.0
         else:
             self.sleep_state.sleepy_dur = 0
+    
     def stimulate(self, force: np.ndarray | None, torque: np.ndarray | None):
         if not self.sleep_state.is_sleep:
             return
@@ -419,8 +426,8 @@ class World(Box):
                 bi = self.bodies[i]
                 bj = self.bodies[j]
                 
-                if bi.sleep_state.is_sleep and bj.sleep_state.is_sleep:
-                    continue
+                # if bi.sleep_state.is_sleep and bj.sleep_state.is_sleep:
+                #     continue
                 
                 f, tau_i, tau_j = self.compute_contact_body_force_torque(i, j)
                 F_tot[i] -= f
@@ -491,8 +498,8 @@ class World(Box):
         
         for i in range(self.n):
             b = self.bodies[i]
-            if b.sleep_state.is_sleep:
-                continue
+            # if b.sleep_state.is_sleep:
+            #     continue
             f, tau = self.compute_wall_body_force_torque(i)
             F_tot[i] += f
             T_tot[i] += tau
@@ -553,8 +560,8 @@ class World(Box):
         for i in range(self.n):
             b = self.bodies[i]
             f = np.array([0, 0, 0])
-            if not b.sleep_state.is_sleep:
-                f[2] += -GRAVITY_ACCEL * b.body.mass
+            # if not b.sleep_state.is_sleep:
+            f[2] += -GRAVITY_ACCEL * b.body.mass
             F_tot[i] += f
         return F_tot
     
@@ -591,6 +598,70 @@ class World(Box):
         for b in self.bodies:
             rmom += b.rotation_momentum()
         return rmom
+
+    def body_has_wall_contact(self, i: int, wall: str | None = None) -> bool:
+        walls = [wall] if wall is not None else ["west", "south", "east", "north", "down", "up"]
+        bi = self.bodies[i]
+
+        for w in walls:
+            if not self.is_overlap_body_wall(i, w):
+                continue
+            for x in range(bi.body.n):
+                if self.is_overlap_particle_wall(i, x, w):
+                    return True
+        return False
+
+
+    def body_has_body_contact(self, i: int) -> bool:
+        bi = self.bodies[i]
+
+        for j in bi.neighbors:
+            if j == i:
+                continue
+            if not self.is_overlap_bodies(i, j):
+                continue
+
+            bj = self.bodies[j]
+            for x in range(bi.body.n):
+                for y in range(bj.body.n):
+                    if self.is_overlap_particles(i, x, j, y):
+                        return True
+        return False
+
+
+    def body_is_supported(self, i: int, nz_tol: float = 0.3) -> bool:
+        # 바닥이 직접 받치면 support
+        if self.body_has_wall_contact(i, "down"):
+            return True
+
+        bi = self.bodies[i]
+
+        # 다른 body가 아래에서 받치면 support
+        for j in bi.neighbors:
+            if j == i:
+                continue
+            if not self.is_overlap_bodies(i, j):
+                continue
+
+            bj = self.bodies[j]
+            for x in range(bi.body.n):
+                for y in range(bj.body.n):
+                    if not self.is_overlap_particles(i, x, j, y):
+                        continue
+
+                    d_xy = self.disp(bj.world_pos(y), bi.world_pos(x))
+                    dist_xy = np.linalg.norm(d_xy)
+                    if dist_xy <= DIST_TOL:
+                        continue
+
+                    n_xy = d_xy / dist_xy
+                    # n_xy는 i -> j 방향
+                    # j가 아래에서 i를 받치면 n_xy.z < 0 이고,
+                    # i가 받는 법선력은 위쪽 성분을 가짐
+                    if n_xy[2] < -nz_tol:
+                        return True
+
+        return False
 #endregion world
 
 #region simulator
@@ -644,16 +715,17 @@ class Simulator:
         
         self.force, self.torque = force, torque
         
-        for body in self.world.bodies:
-            body.lullaby()
+        for i, body in enumerate(self.world.bodies):
+            can_sleep = self.world.body_is_supported(i)
+            body.lullaby(can_sleep)
     
     def is_stable(self):
+        total_ke = self.world.total_trans_energy() + self.world.total_rot_energy()
+
         return (
-            (self.world.total_trans_energy() + self.world.total_rot_energy() < KINETIC_TOL)
-            and
-            np.linalg.norm(self.world.total_trans_mom()) < TMOM_TOL
-            and
-            np.linalg.norm(self.world.total_rot_mom()) < RMOM_TOL
+            total_ke < KINETIC_TOL
+            and self.max_body_speed() < SLEEP_SPD
+            and self.max_body_ang_speed() < SLEEP_ANG_SPD
         )
     
     def simulation(self):
@@ -703,7 +775,7 @@ class Simulator:
             if step % LOG_STEP == 0:
                 dur = int(now - start)
                 print(
-                    f"Step {step}/{max_step} : Time Elapsed={t:.6f} sec : "
+                    f"Step {step}/{max_step} : Time Elapsed={t:.3f} sec : "
                     f"Real Time Elapsed={datetime.timedelta(seconds = dur)}"
                 )
                 print(f"total K = {tote:.6f}, tl K = {te:.6f}, rot K = {re:.6f}")
@@ -729,6 +801,16 @@ class Simulator:
             if b.sleep_state.is_sleep:
                 cnt += 1
         return cnt
+    
+    def max_body_speed(self):
+        if self.world.n == 0:
+            return 0.0
+        return max(np.linalg.norm(b.vel) for b in self.world.bodies)
+
+    def max_body_ang_speed(self):
+        if self.world.n == 0:
+            return 0.0
+        return max(np.linalg.norm(b.w) for b in self.world.bodies)
 #endregion simulator
 
 #region storage
@@ -1041,10 +1123,12 @@ if __name__ == "__main__":
     builder = Builder(storage=storage)
 
     n_balls = 10
-    density = 1.0
+    density = 2.0
 
-    # radius 10개를 uniform(0.2, 0.4)에서 샘플
-    radii = Distributioner.uniform_array(0.2, 0.4, n=n_balls)
+    radii_A = Distributioner.uniform_array(0.2, 0.5, n=n_balls * 2)
+    radii_B = Distributioner.uniform_array(1.0, 2.0, n=n_balls)
+    radii = np.concatenate([radii_A, radii_B])
+    rng.shuffle(radii)
 
     bodies: list[Rigidbody] = []
 
@@ -1069,11 +1153,12 @@ if __name__ == "__main__":
 
     world = builder.make_init_world(
         bodies=bodies,
-        boxtype="imp",
+        boxtype="per",
     )
+    storage.save_world_csv(world, "initial_world.csv")
 
     # 전부 조금 위에서 떨어뜨리고 싶으면 전체 z-offset 추가
-    z_offset = 3.0
+    z_offset = 0.1
     for body in world.bodies:
         body.add_pos(np.array([0.0, 0.0, z_offset], dtype=float))
 
