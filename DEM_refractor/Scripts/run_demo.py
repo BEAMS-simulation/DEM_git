@@ -4,10 +4,10 @@ import math
 import numpy as np
 import matplotlib.pyplot as plt
 
-from DEMRigid.config import SimConfig, BoxParams, GravityParams, ContactParams, TimeParams
-from DEMRigid.model import Sphere, Aggregate, Rigidbody
-from DEMRigid.world import World
-from DEMRigid.simulator import Simulator
+from demrigid.config import SimConfig, BoxParams, GravityParams, ContactParams, TimeParams
+from demrigid.model import Sphere, Aggregate, Rigidbody
+from demrigid.world import World
+from demrigid.simulator import Simulator
 
 def plot_history(hist: dict[str, np.ndarray]) -> None:
     t = hist["t"]
@@ -55,8 +55,8 @@ def main() -> None:
         contact_pw=ContactParams(k_n=4000.0, c_n=60.0, k_t=2000.0, c_t=10.0, mu=0.3, mu_roll=0.3),
         time=TimeParams(dt=2e-4, max_time=10.0, record_stride=500, log_stride=500, stable_time=0.2),
     )
-    n_balls = 8
-    density = 10.0
+    n_balls = 30
+    density = 2.0
     r = 0.5
 
     bodies: list[Rigidbody] = []
