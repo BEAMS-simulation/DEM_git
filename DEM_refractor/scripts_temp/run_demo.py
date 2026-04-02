@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+import os
+import sys
+
+print("cwd =", os.getcwd())
+print("sys.path[0] =", sys.path[0])
+print("sys.path[:5] =", sys.path[:5])
+
 import math
 import numpy as np
 import matplotlib.pyplot as plt
