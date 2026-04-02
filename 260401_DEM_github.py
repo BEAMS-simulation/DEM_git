@@ -703,7 +703,7 @@ class Simulator:
             if step % LOG_STEP == 0:
                 dur = int(now - start)
                 print(
-                    f"Step {step}/{max_step} : Time Elapsed={int(now-start)} sec : "
+                    f"Step {step}/{max_step} : Time Elapsed={t:.6f} sec : "
                     f"Real Time Elapsed={datetime.timedelta(seconds = dur)}"
                 )
                 print(f"total K = {tote:.6f}, tl K = {te:.6f}, rot K = {re:.6f}")
