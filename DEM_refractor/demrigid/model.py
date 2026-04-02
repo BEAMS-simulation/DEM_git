@@ -68,6 +68,7 @@ class SleepState:
     sleepy_steps: int = 0
     
     def reset(self) -> None:
+        self.is_sleep = False
         self.sleepy_steps = 0
     
     def sleep(self) -> None:
@@ -157,7 +158,10 @@ class Rigidbody:
     def linear_momentum(self) -> np.ndarray:
         return self.body.mass * self.vel
     
-    def angular_momentum_world(self) -> np.ndarray:
-        # L_world = R * (I_body * omega_body)
-        L_body = self.body.Ib @ self.omega_body
-        return apply_rot_mat(self.rot_mat(), L_body)
+    def angular_momentum_world(self, origin: np.ndarray | None = None) -> np.ndarray:
+        if origin is None:
+            origin = np.zeros(3, dtype=float)
+        r = self.pos - origin
+        p = self.body.mass * self.vel
+        L_spin = apply_rot_mat(self.rot_mat(), self.body.Ib @ self.omega_body)
+        return np.cross(r, p) + L_spin

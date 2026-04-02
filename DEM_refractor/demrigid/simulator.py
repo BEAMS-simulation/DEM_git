@@ -48,7 +48,7 @@ class Simulator:
         b.pos += b.vel * dt
         
         dq = quat_from_rotvec(b.omega_body * dt)
-        b.quat = quat_normalize(quat_mul(b.quat, dq))
+        b.quat = quat_normalize(quat_mul(dq, b.quat))
         
         b.mark_dirty()
     

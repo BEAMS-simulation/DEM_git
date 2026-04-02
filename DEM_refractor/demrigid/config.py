@@ -43,7 +43,7 @@ class ContactParams:
     c_t: float = 5.0
     
     mu: float = 0.3         # Coulomb 마찰계수
-    mu_roll: float = 0.3    # Rolling 저항
+    mu_roll: float = 0.0    # Rolling 저항
     
     v_eps: float = 1e-9     # can't divide by zero
     

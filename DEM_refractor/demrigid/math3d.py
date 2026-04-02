@@ -57,13 +57,8 @@ def quat_from_rotvec(rotvec: np.ndarray, eps: float = EPS) -> np.ndarray:
     rv = np.asarray(rotvec, dtype=float)
     ang = float(np.linalg.norm(rv))
     if ang < eps:
-        half = 0.5 * ang
         if ang < eps:
             return quat_identity()
-        axis = rv / ang
-        return quat_normalize(np.array(
-            [math.cos(half), *(axis * math.sin(half))], dtype = float
-        ))
         
     half = 0.5 * ang
     axis = rv / ang

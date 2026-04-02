@@ -98,7 +98,8 @@ class World:
                     F[i] -= F_on_j
                     
                     r_i = cp - bi.pos
-                    r_j = cp - bj.pos
+                    bj_pos_img = bi.pos + self.disp(bj.pos, bi.pos)
+                    r_j = cp - bj_pos_img
                     T[i] += np.cross(r_i, -F_on_j) + tau_i_ex
                     T[j] += np.cross(r_j, F_on_j) + tau_j_ex
             

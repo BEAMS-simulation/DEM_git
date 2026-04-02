@@ -113,7 +113,13 @@ class ContactSolver:
         
         self._active_pp.add(key)
         
-        v_rel = v_j - v_i
+        r_ci =  ri * n
+        r_cj = -rj * n
+
+        v_ci = v_i + np.cross(w_i, r_ci)
+        v_cj = v_j + np.cross(w_j, r_cj)
+
+        v_rel = v_cj - v_ci
         v_n = float(np.dot(v_rel, n))
         v_t = v_rel - v_n * n
         
@@ -125,6 +131,7 @@ class ContactSolver:
         if st is None:
             st = ContactState(u_t=np.zeros(3, dtype=float), n_prev=n.copy())
         
+        st.u_t = _tangential_component(st.u_t, n)
         st.u_t = st.u_t + v_t * dt
         st.u_t = _tangential_component(st.u_t, n)
         
@@ -216,8 +223,11 @@ class ContactSolver:
         self._active_pw.add(key)
         
         pars = self.pw
-        v_n = float(np.dot(v, n))
-        v_t = v - v_n * n
+        
+        r_c = -r * n
+        v_contact = v + np.cross(omega_world, r_c)
+        v_n = float(np.dot(v_contact, n))
+        v_t = v_contact - v_n * n
         
         F_n = pars.k_n * delta - pars.c_n * v_n
         F_n = max(0.0, float(F_n))
@@ -226,6 +236,7 @@ class ContactSolver:
         if st is None:
             st = ContactState(u_t = np.zeros(3, dtype=float), n_prev=n.copy())
         
+        st.u_t = _tangential_component(st.u_t, n)
         st.u_t = st.u_t + v_t * dt
         st.u_t = _tangential_component(st.u_t, n)
         F_t = -pars.k_t * st.u_t - pars.c_t * v_t
