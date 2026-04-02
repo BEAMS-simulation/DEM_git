@@ -7,14 +7,16 @@ import csv
 from scipy.spatial.transform import Rotation as R
 from typing import Any, Iterable
 from collections import defaultdict
+import colorama
 
+colorama.init(autoreset=True)
 rng = np.random.default_rng()
 
 
 SPRING_PARTICLE = 400.0
 DAMPING_PARTICLE = 20.0
 
-SPRING_WALL = 4000.0
+SPRING_WALL = 5000.0
 DAMPING_WALL = 60.0 
 
 MU_PARTICLE = 0.3
@@ -24,7 +26,7 @@ ROLLING_DAMPING = 0.4
 DIST_TOL = 1e-15
 
 TIME_STEP = 2e-4
-MAX_TIME  = 10.0
+MAX_TIME  = 100.0
 RECORD_STEP = 1000
 LOG_STEP    = 1000
 STABLE_TIME = 0.15
@@ -336,6 +338,10 @@ class World(Box):
             for b in self.bodies:
                 b.pos[0] %= WALL_X
                 b.pos[1] %= WALL_Y
+        for b in self.bodies:
+            if b.pos[2] < -10:
+                b.pos[2] = 20
+                print(colorama.Fore.RED + "PERMEATE FLOOR!")
         
     def is_overlap_bodies(self, i: int, j: int) -> bool:
         body_i = self.bodies[i]
@@ -1153,7 +1159,7 @@ if __name__ == "__main__":
 
     world = builder.make_init_world(
         bodies=bodies,
-        boxtype="per",
+        boxtype="imp",
     )
     storage.save_world_csv(world, "initial_world.csv")
 
