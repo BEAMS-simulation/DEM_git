@@ -87,8 +87,8 @@ def main() -> None:
     cfg = SimConfig(
         box=BoxParams(boxtype="imp", Lx=2.2, Ly=2.2, Lz=10000.0),
         gravity=GravityParams.standard(9.81),
-        contact_pp=ContactParams(k_n=400.0, c_n=20.0, k_t=200.0, c_t=5.0, mu=0.3, mu_roll=0.3),
-        contact_pw=ContactParams(k_n=4000.0, c_n=60.0, k_t=2000.0, c_t=10.0, mu=0.3, mu_roll=0.3),
+        contact_pp=ContactParams(k_n=4000.0, c_n=35.0, k_t=2000.0, c_t=20.0, mu=0.3, mu_roll=0.1),
+        contact_pw=ContactParams(k_n=20000.0, c_n=80.0, k_t=10000.0, c_t=35.0, mu=0.3, mu_roll=0.1),
         time=TimeParams(dt=2e-4, max_time=10.0, record_stride=500, log_stride=500, stable_time=0.2),
     )
 
