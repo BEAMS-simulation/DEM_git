@@ -5,8 +5,7 @@ from dataclasses import dataclass, field
 from time import time
 import csv
 from scipy.spatial.transform import Rotation as R
-from typing import Any, Iterable
-from collections import defaultdict
+from typing import Any
 
 rng = np.random.default_rng()
 
@@ -14,9 +13,9 @@ rng = np.random.default_rng()
 #-----------------------------------------------------------
 #region Parameter
 # Simulation Parameters
-CONTACT_SPRING_CONST    = 100.0
+CONTACT_SPRING_CONST    = 400.0
 CONTACT_DAMPING         = 15.0
-FLOOR_SPRING_CONST      = 3000.0
+FLOOR_SPRING_CONST      = 10000.0
 FLOOR_DAMPING           = 15.0
 WALL_SPRING_CONST       = 2000.0
 WALL_DAMPING            = 15.0
@@ -34,8 +33,10 @@ MAX_TIME                = 5.0
 WALL_LENGTH_X           = 4.00
 WALL_LENGTH_Y           = 4.00
 
+# Initializating Type
+
 # Particle Number
-N                       = 30
+N                       = 10
 
 # Stabilized Condition
 STABLE_TIME             = 0.50
@@ -49,11 +50,6 @@ Z_WINDOW                = 200
 
 # Can't divide by 0
 DIST_TOL                = 1e-15
-
-CSV_HEADER = ["body id", "particle id", "x", "y", "z", "r", "m"]
-CHECKPOINT_INTERVAL = 10000
-CHECK = True
-LOG_INTERVAL = 1000
 #endregion Parameter
 
 #-----------------------------------------------------------
@@ -65,17 +61,9 @@ class Particle:
     pos:    np.ndarray  # relative position vector
     r:      float
     m:      float
-    
-    def __post_init__(self):
-        self.pos = np.asarray(self.pos, dtype=float)
-        self.r = float(self.r)
-        self.m = float(self.m)
-        if self.pos.shape != (3,):
-            raise ValueError("Particle.pos must be a 3D vector.")
-        if self.r <= 0:
-            raise ValueError("Particle radius must be positive.")
-        if self.m <= 0:
-            raise ValueError("Particle mass must be positive.")
+
+#-----------------------------------------------------------
+#
 
 #-----------------------------------------------------------
 # Particles Utility Functions
@@ -167,16 +155,16 @@ def get_uniform_array(a: float, b: float, n: int = 1):
     rad = rng.uniform(a, b, size = n)
     return rad[0] if n == 1 else rad
 
-def get_random_dist(dist_type: str | int, *args):
-    match dist_type:
-        case "logn" | "lognormal" | 0:
+def get_random_dist(type: str | int, *args):
+    match type:
+        case "logn" | 0:
             return get_lognormal_array(*args)
-        case "norm" | "normal" | 1:
+        case "norm" | 1:
             return get_normal_array(*args)
-        case "unif" | "uniform" | 2:
+        case "unif" | 2:
             return get_uniform_array(*args)
         case _:
-            raise RuntimeError(f"Unsupported distribution: {dist_type!r}")
+            raise RuntimeError("no matched distribution!")
 #endregion Classes
 
 #-----------------------------------------------------------
@@ -562,7 +550,7 @@ def leapfrog(bodies: list[RigidBody]):
         dw      = b.Ib_inv @ (tau - np.cross(b.w, b.Ib @ b.w))
         b.w     += 0.5 * dw * TIME_STEP
 
-def simulate(bodies: list[RigidBody], checkpoint_interval: int | None = CHECKPOINT_INTERVAL):
+def simulate(bodies: list[RigidBody]):
     ts              = []
     tke_hist        = []
     rke_hist        = []
@@ -576,7 +564,7 @@ def simulate(bodies: list[RigidBody], checkpoint_interval: int | None = CHECKPOI
     start           = time()
     
     step            = 0
-    max_step        = int(np.ceil(MAX_TIME / TIME_STEP))
+    max_step        = MAX_TIME // TIME_STEP + 1.0
     
     while t < MAX_TIME:
         leapfrog(bodies)
@@ -610,20 +598,16 @@ def simulate(bodies: list[RigidBody], checkpoint_interval: int | None = CHECKPOI
             print(f"K = {totke:.6e}")
             break
         
-        now = time()
-        if step % LOG_INTERVAL == 0:
-            dur = int(now - start)
-            print(
-                f"Step {step}/{max_step} : Simulation Time={t:.6f} sec : "
-                f"Real Time Elapsed={datetime.timedelta(seconds=dur)}"
-            )
+        flag        = time()
+        if step % 1000 == 0:
+            dur = int(flag-start)
+            print(f"Step {step}/{max_step} : Simulation Time={t:.6f}sec : Real Time Elapsed={datetime.timedelta(seconds=dur)}sec")
             print(f"total K = {totke:.6f}, tl K = {tke:.6f}, rot K = {rke:.6f}")
             print(f"total p = {p_norm:.6f}, total l = {l_norm:.6f}")
             if stable_duration > 0.0:
-                print(f"Stabilizing... {stable_duration:.6f}/{STABLE_TIME:.6f} sec")
-
-        if checkpoint_interval and step % checkpoint_interval == 0 and CHECK:
-            save_bodies_csv(bodies, filename=f"bodies_step_{step}.csv", coords="world")
+                print(f"Stabilzed...{stable_duration}/{STABLE_TIME}sec")
+        if step % 10000 == 0:
+            save_bodies_csv(bodies, filename = f"bodies_step_{step}.csv")
             print(f"Saved bodies at step {step} to bodies_step_{step}.csv")
     end = time()
     
@@ -645,91 +629,18 @@ def simulate(bodies: list[RigidBody], checkpoint_interval: int | None = CHECKPOI
 
 #-----------------------------------------------------------
 #region csv
-def save_bodies_csv(bodies: list[RigidBody], filename: str = "final_bodies.csv", coords: str = "world"):
-    if coords not in {"world", "body"}:
-        raise ValueError("coords must be either 'world' or 'body'.")
-
-    with open(filename, "w", newline="", encoding="utf-8") as f:
+def save_bodies_csv(bodies: list[RigidBody], filename = "final_bodies.csv"):
+    with open(filename, "w", newline = "", encoding = "utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow(CSV_HEADER)
-
-        for body in bodies:
-            for particle_id, p in enumerate(body.particles):
-                pos = body.world_pos(p) if coords == "world" else p.pos
+        writer.writerow(["body id", "particle id", "x", "y", "z", "r", "m"])
+        
+        for i, b in enumerate(bodies):
+            for x, p in enumerate(b.particles):
+                pos = b.world_pos(p)
                 writer.writerow([
-                    body.id,
-                    particle_id,
-                    pos[0],
-                    pos[1],
-                    pos[2],
-                    p.r,
-                    p.m,
+                    i, x, pos[0], pos[1], pos[2], p.r, p.m
                 ])
-
-
-def _group_csv_rows(rows: Iterable[dict[str, str]]):
-    grouped: dict[int, list[dict[str, str]]] = defaultdict(list)
-    for row in rows:
-        try:
-            body_id = int(row["body id"])
-        except KeyError as exc:
-            raise ValueError("CSV header must contain: 'body id', 'particle id', 'x', 'y', 'z', 'r', 'm'.") from exc
-        grouped[body_id].append(row)
-    return grouped
-
-
-def load_bodies_from_csv(
-    filename: str,
-    coords: str = "world",
-    vel: np.ndarray | None = None,
-) -> list[RigidBody]:
-    if coords not in {"world", "body"}:
-        raise ValueError("coords must be either 'world' or 'body'.")
-
-    if vel is None:
-        vel = np.zeros(3, dtype=float)
-    else:
-        vel = np.asarray(vel, dtype=float)
-
-    with open(filename, "r", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        if reader.fieldnames != CSV_HEADER:
-            raise ValueError(
-                f"Unexpected CSV header: {reader.fieldnames}. Expected {CSV_HEADER}."
-            )
-        grouped = _group_csv_rows(reader)
-
-    bodies: list[RigidBody] = []
-    for body_id, items in sorted(grouped.items(), key=lambda x: x[0]):
-        xyz = np.array(
-            [[float(row["x"]), float(row["y"]), float(row["z"])] for row in items],
-            dtype=float,
-        )
-        radii = np.array([float(row["r"]) for row in items], dtype=float)
-        masses = np.array([float(row["m"]) for row in items], dtype=float)
-
-        if coords == "world":
-            total_mass = float(np.sum(masses))
-            com = np.sum(masses[:, None] * xyz, axis=0) / total_mass
-            rel_xyz = xyz - com
-            body_pos = com
-        else:
-            rel_xyz = xyz
-            body_pos = np.zeros(3, dtype=float)
-
-        particles = [
-            Particle(pos=rel_xyz[i], r=radii[i], m=masses[i])
-            for i in range(len(items))
-        ]
-        bodies.append(
-            RigidBody(
-                id=body_id,
-                particles=particles,
-                pos=body_pos,
-                vel=vel.copy(),
-            )
-        )
-    return bodies
+#endregion csv
 
 
 def make_body_from_specs(
@@ -738,91 +649,102 @@ def make_body_from_specs(
     pos: np.ndarray | None = None,
     vel: np.ndarray | None = None,
 ) -> RigidBody:
-    pos = np.zeros(3, dtype=float) if pos is None else np.asarray(pos, dtype=float)
-    vel = np.zeros(3, dtype=float) if vel is None else np.asarray(vel, dtype=float)
+    if pos is None:
+        pos = np.zeros(3, dtype=float)
+    else:
+        pos = np.asarray(pos, dtype=float)
+
+    if vel is None:
+        vel = np.zeros(3, dtype=float)
+    else:
+        vel = np.asarray(vel, dtype=float)
 
     particles = [
         Particle(pos=np.array(xyz, dtype=float), r=float(rad), m=float(mass))
         for xyz, rad, mass in specs
     ]
-    return RigidBody(id=body_id, particles=particles, pos=pos, vel=vel)
 
+    return RigidBody(
+        id=body_id,
+        particles=particles,
+        pos=pos,
+        vel=vel,
+    )
 
 def make_body_from_csv(
-    filename: str,
-    body_id: int | None = None,
-    coords: str = "world",
-    pos: np.ndarray | None = None,
-    vel: np.ndarray | None = None,
-) -> RigidBody:
-    bodies = load_bodies_from_csv(filename=filename, coords=coords, vel=vel)
-
-    if body_id is None:
-        if len(bodies) != 1:
-            raise ValueError(
-                "CSV contains multiple bodies. Pass body_id explicitly or use load_bodies_from_csv()."
-            )
-        body = bodies[0]
+        filename,
+        body_id: int = 0,
+        pos: np.ndarray | None = None,
+        vel: np.ndarray | None = None
+):
+    if pos is None:
+        pos = np.zeros(3, dtype=float)
     else:
-        matched = [b for b in bodies if b.id == body_id]
-        if not matched:
-            raise ValueError(f"No body found with body_id={body_id}.")
-        body = matched[0]
+        pos = np.asarray(pos, dtype=float)
 
-    if pos is not None:
-        body.pos = np.asarray(pos, dtype=float)
-    return body
+    if vel is None:
+        vel = np.zeros(3, dtype=float)
+    else:
+        vel = np.asarray(vel, dtype=float)
+    
+    f = open(filename , 'r' , encoding='utf-8')
+    data = csv.reader(f,delimiter = ',')
+    header = next(data)
 
+    particles = []
+
+    for row in data:
+        bid, x, y, z, r, m = map(float, row)
+        bid = int(bid)
+        particles.append(
+            Particle(pos = np.array([x, y, z]), r = float(r), m = float(m))
+        )
+    return RigidBody(
+        id = body_id,
+        particles=particles,
+        pos = pos,
+        vel = vel
+    )
 
 def make_balls(
-    n: int,
-    radius_dist: str | int,
-    *dist_args,
-    density: float = 1.0,
+        n: int,
+        radius_dist: str | int,
 ):
-    if n <= 0:
-        raise ValueError("n must be positive.")
-    if density <= 0:
-        raise ValueError("density must be positive.")
-
-    if not dist_args:
-        dist_args = (-0.5, 0.1)
-
     bodies = []
     for i in range(n):
-        r = float(get_random_dist(radius_dist, *dist_args))
-        if r <= 0:
-            raise ValueError(
-                "Generated a non-positive radius. Adjust the distribution parameters."
-            )
-        m = density * (4.0 / 3.0) * np.pi * r ** 3
+        r = get_random_dist(radius_dist, -0.5, 0.1)
+        m = 4/3 * np.pi * r**3
         particles = [Particle(pos=np.zeros(3), r=r, m=m)]
         body = RigidBody(id=i, particles=particles, pos=np.zeros(3), vel=np.zeros(3))
         bodies.append(body)
     return bodies
-#endregion csv
     
 
 #-----------------------------------------------------------
 #region Main
 # Main
 if __name__ == "__main__":
-    bodies = make_balls(N, radius_dist="logn", density=1.0)
+    # triangle_specs = [
+    # ((0.0, 0.0, 0.0), 0.2, 1.0),
+    # ((0.35, 0.0, 0.0), 0.2, 1.0),
+    # ((0.0, 0.35, 0.0), 0.2, 1.0),
+    # ]
+
+    # temp = []
+    # for i in range(4):
+    #     temp.append(make_body_from_specs(i, triangle_specs))
+    
+    # bodies = random_bodies_states(temp)
+    # res_bodies, ts, tke_hist, rke_hist, totke_hist, px_hist, py_hist, pz_hist, lx_hist, ly_hist, lz_hist = simulate(bodies)
+    # plot_results(ts, tke_hist, rke_hist, totke_hist, px_hist, py_hist, pz_hist, lx_hist, ly_hist, lz_hist)
+    # save_bodies_csv(res_bodies, filename = "final_bodies.csv")
+    # body = make_body_from_csv(filename = "aggregate_particles.csv")
+
+    # temp = [body]
+    # bodies = random_bodies_states(temp)
+    bodies = make_balls(N, radius_dist = "logn")
     bodies = random_bodies_states(bodies)
-
-    (
-        res_bodies,
-        ts,
-        tke_hist,
-        rke_hist,
-        totke_hist,
-        px_hist,
-        py_hist,
-        pz_hist,
-        lx_hist,
-        ly_hist,
-        lz_hist,
-    ) = simulate(bodies)
-
+    res_bodies, ts, tke_hist, rke_hist, totke_hist, px_hist, py_hist, pz_hist, lx_hist, ly_hist, lz_hist = simulate(bodies)
     plot_results(ts, tke_hist, rke_hist, totke_hist, px_hist, py_hist, pz_hist, lx_hist, ly_hist, lz_hist)
-    save_bodies_csv(res_bodies, filename="final_bodies.csv", coords="world")
+    save_bodies_csv(res_bodies, filename = "final_bodies.csv")
+    # save_bodies_csv([body], filename = "test.csv")
