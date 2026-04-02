@@ -1041,35 +1041,39 @@ if __name__ == "__main__":
     builder = Builder(storage=storage)
 
     n_balls = 10
-    radius = 0.5
-    mass = 1.0
+    density = 1.0
 
-    sphere = builder.make_sphere(
-        pos=np.zeros(3, dtype=float),
-        r=radius,
-        m=mass,
-    )
-    aggregate = builder.make_aggregate([sphere])
-    
-    bodies = [
-        builder.make_rigid_body(
+    # radius 10개를 uniform(0.2, 0.4)에서 샘플
+    radii = Distributioner.uniform_array(0.2, 0.4, n=n_balls)
+
+    bodies: list[Rigidbody] = []
+
+    for i, r in enumerate(radii):
+        # 같은 밀도라면 질량은 부피 비례
+        m = density * (4.0 / 3.0) * np.pi * (r ** 3)
+
+        sphere = builder.make_sphere(
+            pos=np.zeros(3, dtype=float),   # single sphere aggregate -> local origin
+            r=float(r),
+            m=float(m),
+        )
+
+        aggregate = builder.make_aggregate([sphere])
+
+        body = builder.make_rigid_body(
             aggregate=aggregate,
             id=i,
-            pos=np.zeros(3, dtype=float),
+            pos=np.zeros(3, dtype=float),   # 실제 초기 배치는 make_init_world가 정함
         )
-        for i in range(n_balls)
-    ]
+        bodies.append(body)
 
-    tic = time()
-    # 초기 랜덤 배치
     world = builder.make_init_world(
         bodies=bodies,
         boxtype="imp",
     )
-    toc = time()
-    print(f"initialized in {toc-tic:.3f} sec")
 
-    z_offset = 5.0
+    # 전부 조금 위에서 떨어뜨리고 싶으면 전체 z-offset 추가
+    z_offset = 3.0
     for body in world.bodies:
         body.add_pos(np.array([0.0, 0.0, z_offset], dtype=float))
 
@@ -1078,7 +1082,7 @@ if __name__ == "__main__":
 
     world_final, ts, te_hist, re_hist, p_hist, l_hist = sim.simulation()
 
-    storage.save_world_csv(world_final, "final_state.csv")
     plot_history(ts, te_hist, re_hist, p_hist, l_hist)
+    storage.save_world_csv(world_final, "final_state.csv")
 
 #endregion main
