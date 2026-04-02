@@ -17,11 +17,11 @@ MU_PARTICLE = 0.3
 SPRING_WALL = 10000.0
 DAMPING_WALL = 15.0 
 MU_WALL = 0.3 
-ROLLING_DAMPING = 0.3 
+ROLLING_DAMPING = 0.6
 
 DIST_TOL = 1e-15
 
-TIME_STEP = 2e-5
+TIME_STEP = 1e-4
 MAX_TIME  = 30.0
 RECORD_STEP = 1000
 LOG_STEP    = 1000
@@ -32,12 +32,12 @@ TMOM_TOL    = 1e-3
 RMOM_TOL    = 1e-3
 
 SLEEP_DUR_THRESHOLD = 30
-SLEEP_SPD = 1e-5
-SLEEP_ANG_SPD = 1e-5
-WAKE_SPD = 2e-4
-WAKE_ANG_SPD = 2e-4
-WAKE_ACC = 1e-3
-WAKE_ANG_ACC = 1e-3
+SLEEP_SPD = 1e-4
+SLEEP_ANG_SPD = 1e-4
+WAKE_SPD = 5e-4
+WAKE_ANG_SPD = 5e-4
+WAKE_ACC = 1e-2
+WAKE_ANG_ACC = 1e-2
 
 WALL_X = 4.0
 WALL_Y = 4.0
@@ -1040,7 +1040,7 @@ if __name__ == "__main__":
     storage = Storage()
     builder = Builder(storage=storage)
 
-    n_balls = 30
+    n_balls = 10
     radius = 0.5
     mass = 1.0
 
