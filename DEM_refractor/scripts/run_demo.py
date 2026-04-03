@@ -68,8 +68,25 @@ def build_world(cfg: SimConfig, n_balls: int = 30, density: float = 2.0, r: floa
 
     return World(cfg, bodies)
 
+def build_bodies(cfg: SimConfig, n_balls: int, density: float = 2.0, r: float = 0.5, dz: float = 0.0) -> list[Rigidbody]:
+    bodies = list[Rigidbody] = []
+    rng = np.random.default_rng(321)
+    
+    for i in range(n_balls):
+        m = density * (4.0 / 3.0) * math.pi * (r ** 3)
+        agg = Aggregate([Sphere(r=r, m=m, pos_local=np.zeros(3, dtype=float))])
+        pos = np.array([
+            rng.uniform(0.5, cfg.box.Lx - 0.5),
+            rng.uniform(0.5, cfg.box.Ly - 0.5),
+            0.5 + 2.1 * r * i + dz,
+        ], dtype = float)
+        bodies.append(Rigidbody(body = agg, id=i, pos=pos))
+    
+    return bodies
+
 
 def save_outputs(world: World, hist: dict[str, np.ndarray], out_dir: str | Path) -> None:
+    
     out_path = Path(out_dir)
     storage = CsvStorage()
 
@@ -92,7 +109,10 @@ def main() -> None:
         time=TimeParams(dt=2e-4, max_time=10.0, record_stride=500, log_stride=500, stable_time=0.2),
     )
 
-    world = build_world(cfg, n_balls=30, density=2.0, r=0.5)
+    body_1 = build_bodies(cfg, n_balls=20, density=2.0, r=1.5,)
+    body_2 = build_bodies(cfg, n_balls=30, density=2.0, r=0.5,dz = 60)
+    body = body_1 + body_2
+    world = World(cfg, body)
     sim = Simulator(world)
     sim.initialize()
 
